@@ -197,6 +197,18 @@ class KaraokeApp {
             <label>🎤 Mic <span id="micVolVal">150</span>%</label>
             <input type="range" id="micVol" min="0" max="400" value="150">
           </div>
+          <div class="vol-row">
+            <label>🔍 Zoom <span id="zoomVal">0.0</span>x</label>
+            <input type="range" id="zoomSlider" min="50" max="300" value="100">
+          </div>
+          <div class="vol-row">
+            <label>☀️ Bright <span id="brightVal">100</span>%</label>
+            <input type="range" id="brightSlider" min="50" max="200" value="100">
+          </div>
+          <div class="vol-row">
+            <label>🌡️ Warmth <span id="warmthVal">0</span>%</label>
+            <input type="range" id="warmthSlider" min="0" max="100" value="0">
+          </div>
           <button id="stopBtn" class="btn-stop hidden">⏹ Stop & Preview</button>
         </div>
       </div>
@@ -210,6 +222,18 @@ class KaraokeApp {
 
     await this.setupMicCamera();
     this.runCountdown();
+  }
+
+  updateCamFilter() {
+    const zoom   = document.getElementById('zoomSlider')?.value / 100 || 1;
+    const bright = document.getElementById('brightSlider')?.value / 100 || 1;
+    const warmth = document.getElementById('warmthSlider')?.value / 100 || 0;
+    // scaleX(-1) mirrors, scale(zoom) zooms, translateZ(0) forces GPU
+    const vid = document.getElementById('camPreview');
+    if (vid) {
+      vid.style.transform = `scaleX(-1) scale(${zoom})`;
+      vid.style.filter = `brightness(${bright}) sepia(${warmth})`;
+    }
   }
 
   async setupMicCamera() {
@@ -257,15 +281,72 @@ class KaraokeApp {
     micSource.connect(preAmp); preAmp.connect(compressor);
     compressor.connect(this.micGain); this.micGain.connect(dest);
 
+    // Canvas to capture filtered+mirrored+zoomed video
+    const isPortrait = this.orientation === 'portrait';
+    const cW = isPortrait ? 720  : 1280;
+    const cH = isPortrait ? 1280 : 720;
+    const canvas = document.createElement('canvas');
+    canvas.width  = cW;
+    canvas.height = cH;
+    const ctx = canvas.getContext('2d');
+    const vid = document.getElementById('camPreview');
+
+    const drawFrame = () => {
+      if (!this.mediaRecorder || this.mediaRecorder.state === 'inactive') return;
+      const zoom   = this.camZoom   || 1;
+      const bright = this.camBright || 1;
+      const warmth = this.camWarmth || 0;
+
+      ctx.save();
+      ctx.filter = `brightness(${bright}) sepia(${warmth})`;
+      // Mirror + zoom: translate to center, scale, draw
+      ctx.translate(cW, 0);
+      ctx.scale(-zoom, zoom);
+      const offX = (cW * zoom - cW) / 2 / zoom;
+      const offY = (cH * zoom - cH) / 2 / zoom;
+      ctx.drawImage(vid, -offX, -offY, cW, cH);
+      ctx.restore();
+      requestAnimationFrame(drawFrame);
+    };
+
+    const canvasStream = canvas.captureStream(30);
     this.finalStream = new MediaStream([
-      ...this.cameraStream.getVideoTracks(),
+      ...canvasStream.getVideoTracks(),
       ...dest.stream.getAudioTracks()
     ]);
+
+    // Start drawing once video plays
+    vid.addEventListener('play', () => requestAnimationFrame(drawFrame), { once: true });
 
     document.getElementById('micVol').addEventListener('input', e => {
       this.micGain.gain.value = e.target.value / 100;
       document.getElementById('micVolVal').textContent = e.target.value;
     });
+
+    // Camera filter controls
+    this.camZoom   = 1;
+    this.camBright = 1;
+    this.camWarmth = 0;
+
+    document.getElementById('zoomSlider').addEventListener('input', e => {
+      this.camZoom = e.target.value / 100;
+      const display = (this.camZoom - 1).toFixed(1);
+      document.getElementById('zoomVal').textContent = (display > 0 ? '+' : '') + display;
+      this.updateCamFilter();
+    });
+    document.getElementById('brightSlider').addEventListener('input', e => {
+      this.camBright = e.target.value / 100;
+      document.getElementById('brightVal').textContent = e.target.value;
+      this.updateCamFilter();
+    });
+    document.getElementById('warmthSlider').addEventListener('input', e => {
+      this.camWarmth = e.target.value / 100;
+      document.getElementById('warmthVal').textContent = e.target.value;
+      this.updateCamFilter();
+    });
+
+    // Apply mirror immediately
+    this.updateCamFilter();
   }
 
   runCountdown() {
