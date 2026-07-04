@@ -178,11 +178,6 @@ class KaraokeApp {
 
   async startRecordingScreen() {
     const isPortrait = this.orientation === 'portrait';
-    const songVolControl = this.bgMode === 'file' ? `
-      <div class="vol-row">
-        <label>🎵 Song <span id="songVolVal">100</span>%</label>
-        <input type="range" id="songVol" min="0" max="200" value="100">
-      </div>` : '';
 
     document.getElementById('app').innerHTML = `
       <div class="rec-screen">
@@ -196,26 +191,37 @@ class KaraokeApp {
           <video id="camPreview" autoplay muted playsinline></video>
           <div id="countdown" class="countdown hidden"></div>
           <div id="recBadge" class="rec-badge hidden">● REC</div>
-        </div>
-        <div class="rec-controls">
-          <div class="vol-row">
-            <label>🎤 Mic <span id="micVolVal">150</span>%</label>
-            <input type="range" id="micVol" min="0" max="400" value="150">
+          <div class="cam-overlay">
+            <div class="overlay-sliders">
+              <div class="ov-row">
+                <span>🎤</span>
+                <input type="range" id="micVol" min="0" max="400" value="150">
+                <span id="micVolVal">150</span>%
+              </div>
+              ${this.bgMode === 'file' ? `
+              <div class="ov-row">
+                <span>🎵</span>
+                <input type="range" id="songVol" min="0" max="200" value="100">
+                <span id="songVolVal">100</span>%
+              </div>` : ''}
+              <div class="ov-row">
+                <span>🔍</span>
+                <input type="range" id="zoomSlider" min="50" max="300" value="100">
+                <span id="zoomVal">0.0</span>x
+              </div>
+              <div class="ov-row">
+                <span>☀️</span>
+                <input type="range" id="brightSlider" min="50" max="200" value="100">
+                <span id="brightVal">100</span>%
+              </div>
+              <div class="ov-row">
+                <span>🌡️</span>
+                <input type="range" id="warmthSlider" min="0" max="100" value="0">
+                <span id="warmthVal">0</span>%
+              </div>
+            </div>
+            <button id="stopBtn" class="btn-stop hidden">⏹ Stop & Preview</button>
           </div>
-          ${songVolControl}
-          <div class="vol-row">
-            <label>🔍 Zoom <span id="zoomVal">0.0</span>x</label>
-            <input type="range" id="zoomSlider" min="50" max="300" value="100">
-          </div>
-          <div class="vol-row">
-            <label>☀️ Bright <span id="brightVal">100</span>%</label>
-            <input type="range" id="brightSlider" min="50" max="200" value="100">
-          </div>
-          <div class="vol-row">
-            <label>🌡️ Warmth <span id="warmthVal">0</span>%</label>
-            <input type="range" id="warmthSlider" min="0" max="100" value="0">
-          </div>
-          <button id="stopBtn" class="btn-stop hidden">⏹ Stop & Preview</button>
         </div>
       </div>
     `;
@@ -310,13 +316,23 @@ class KaraokeApp {
     // Continuous draw loop — runs always, not gated on recording state
     const drawLoop = () => {
       this.rafId = requestAnimationFrame(drawLoop);
-      if (vid.readyState < 2) return; // not enough data yet
+      if (vid.readyState < 2) return;
+      const z = this.camZoom;
+      const vw = vid.videoWidth  || cW;
+      const vh = vid.videoHeight || cH;
+      // Fit video into canvas maintaining aspect ratio (like object-fit: cover)
+      const scale = Math.max(cW / vw, cH / vh) * z;
+      const dW = vw * scale;
+      const dH = vh * scale;
+      const dx = (cW - dW) / 2;
+      const dy = (cH - dH) / 2;
+      ctx2d.clearRect(0, 0, cW, cH);
       ctx2d.save();
       ctx2d.filter = `brightness(${this.camBright}) sepia(${this.camWarmth})`;
-      // Mirror horizontally + zoom from center
-      ctx2d.translate(cW / 2, cH / 2);
-      ctx2d.scale(-this.camZoom, this.camZoom);
-      ctx2d.drawImage(vid, -cW / 2, -cH / 2, cW, cH);
+      // Mirror horizontally around canvas center
+      ctx2d.translate(cW, 0);
+      ctx2d.scale(-1, 1);
+      ctx2d.drawImage(vid, dx, dy, dW, dH);
       ctx2d.restore();
     };
     drawLoop();
