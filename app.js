@@ -9,6 +9,10 @@ class KaraokeApp {
     this.mediaRecorder = null;
     this.recordedChunks = [];
     this.audioCtx = null;
+    this.camZoom = 1;
+    this.camBright = 1;
+    this.camWarmth = 0;
+    this.rafId = null;
     this.render('home');
   }
 
@@ -34,12 +38,10 @@ class KaraokeApp {
             <button class="tab-btn active" id="tabYt">YouTube</button>
             <button class="tab-btn" id="tabFile">Upload File</button>
           </div>
-
           <div id="panelYt">
             <input id="ytUrl" type="text" placeholder="https://www.youtube.com/watch?v=..." />
             <div id="ytPreview" class="yt-preview hidden"></div>
           </div>
-
           <div id="panelFile" class="hidden">
             <label class="file-drop" id="fileDrop">
               <span id="fileLabel">📁 Click or drag a video file here (MP4, WebM, MOV)</span>
@@ -72,10 +74,9 @@ class KaraokeApp {
   }
 
   bindHome() {
-    this.bgMode = 'yt'; // 'yt' | 'file'
+    this.bgMode = 'yt';
     this.populateDevices();
 
-    // Tabs
     const tabs = { tabYt: 'yt', tabFile: 'file' };
     const panels = { yt: 'panelYt', file: 'panelFile' };
     Object.entries(tabs).forEach(([btnId, mode]) => {
@@ -170,21 +171,25 @@ class KaraokeApp {
   checkReady() {
     const btn = document.getElementById('startBtn');
     if (!btn) return;
-    const hasVideo = !!this.youtubeId || !!this.localVideoFile;
-    btn.disabled = !(hasVideo && this.micDeviceId);
+    btn.disabled = !((this.youtubeId || this.localVideoFile) && this.micDeviceId);
   }
 
   // ─── RECORDING ───────────────────────────────────────────────────────────────
 
   async startRecordingScreen() {
     const isPortrait = this.orientation === 'portrait';
+    const songVolControl = this.bgMode === 'file' ? `
+      <div class="vol-row">
+        <label>🎵 Song <span id="songVolVal">100</span>%</label>
+        <input type="range" id="songVol" min="0" max="200" value="100">
+      </div>` : '';
 
     document.getElementById('app').innerHTML = `
       <div class="rec-screen">
         <div class="yt-area" id="bgArea">
           ${this.bgMode === 'file'
             ? `<video id="bgVideo" class="bg-video" src="${URL.createObjectURL(this.localVideoFile)}" controls playsinline></video>`
-              : `<iframe class="yt-iframe" src="https://www.youtube.com/embed/${this.youtubeId}?autoplay=1&controls=1" allow="autoplay; encrypted-media" allowfullscreen></iframe>`
+            : `<iframe class="yt-iframe" src="https://www.youtube.com/embed/${this.youtubeId}?autoplay=1&controls=1" allow="autoplay; encrypted-media" allowfullscreen></iframe>`
           }
         </div>
         <div class="cam-area${isPortrait ? ' portrait-mode' : ''}">
@@ -197,6 +202,7 @@ class KaraokeApp {
             <label>🎤 Mic <span id="micVolVal">150</span>%</label>
             <input type="range" id="micVol" min="0" max="400" value="150">
           </div>
+          ${songVolControl}
           <div class="vol-row">
             <label>🔍 Zoom <span id="zoomVal">0.0</span>x</label>
             <input type="range" id="zoomSlider" min="50" max="300" value="100">
@@ -215,9 +221,8 @@ class KaraokeApp {
     `;
 
     if (this.bgMode === 'file') {
-      document.getElementById('bgVideo').addEventListener('canplay', () => {
-        document.getElementById('bgVideo').play().catch(() => {});
-      });
+      const bgVid = document.getElementById('bgVideo');
+      bgVid.addEventListener('canplay', () => bgVid.play().catch(() => {}));
     }
 
     await this.setupMicCamera();
@@ -225,20 +230,15 @@ class KaraokeApp {
   }
 
   updateCamFilter() {
-    const zoom   = document.getElementById('zoomSlider')?.value / 100 || 1;
-    const bright = document.getElementById('brightSlider')?.value / 100 || 1;
-    const warmth = document.getElementById('warmthSlider')?.value / 100 || 0;
-    // scaleX(-1) mirrors, scale(zoom) zooms, translateZ(0) forces GPU
     const vid = document.getElementById('camPreview');
-    if (vid) {
-      vid.style.transform = `scaleX(-1) scale(${zoom})`;
-      vid.style.filter = `brightness(${bright}) sepia(${warmth})`;
-    }
+    if (!vid) return;
+    vid.style.transform = `scaleX(-1) scale(${this.camZoom})`;
+    vid.style.filter    = `brightness(${this.camBright}) sepia(${this.camWarmth})`;
   }
 
   async setupMicCamera() {
     const isPortrait = this.orientation === 'portrait';
-    const vW = isPortrait ? 720 : 1280;
+    const vW = isPortrait ? 720  : 1280;
     const vH = isPortrait ? 1280 : 720;
     const camId = this.cameraDeviceId && this.cameraDeviceId !== 'default' ? { exact: this.cameraDeviceId } : undefined;
 
@@ -263,51 +263,63 @@ class KaraokeApp {
       });
     }
 
-    document.getElementById('camPreview').srcObject = this.cameraStream;
+    const vid = document.getElementById('camPreview');
+    vid.srcObject = this.cameraStream;
 
     // ── Audio graph ──────────────────────────────────────────────────────────
     this.audioCtx = new AudioContext({ sampleRate: 48000 });
     const dest = this.audioCtx.createMediaStreamDestination();
 
-    // Mic chain: preAmp → compressor → micGain → dest
-    const micSource = this.audioCtx.createMediaStreamSource(this.cameraStream);
-    const preAmp = this.audioCtx.createGain();
+    const micSource  = this.audioCtx.createMediaStreamSource(this.cameraStream);
+    const preAmp     = this.audioCtx.createGain();
     preAmp.gain.value = 3.0;
     const compressor = this.audioCtx.createDynamicsCompressor();
     compressor.threshold.value = -18; compressor.knee.value = 6;
     compressor.ratio.value = 3; compressor.attack.value = 0.001; compressor.release.value = 0.1;
     this.micGain = this.audioCtx.createGain();
     this.micGain.gain.value = 1.5;
-    micSource.connect(preAmp); preAmp.connect(compressor);
-    compressor.connect(this.micGain); this.micGain.connect(dest);
+    micSource.connect(preAmp);
+    preAmp.connect(compressor);
+    compressor.connect(this.micGain);
+    this.micGain.connect(dest);
 
-    // Canvas to capture filtered+mirrored+zoomed video
-    const isPortrait = this.orientation === 'portrait';
-    const cW = isPortrait ? 720  : 1280;
-    const cH = isPortrait ? 1280 : 720;
+    // Song audio (local file only)
+    if (this.bgMode === 'file') {
+      const bgVid = document.getElementById('bgVideo');
+      const songSource = this.audioCtx.createMediaElementSource(bgVid);
+      this.songGain = this.audioCtx.createGain();
+      this.songGain.gain.value = 1.0;
+      songSource.connect(this.songGain);
+      this.songGain.connect(dest);
+      // Also connect to speakers so user hears it
+      this.songGain.connect(this.audioCtx.destination);
+
+      document.getElementById('songVol').addEventListener('input', e => {
+        this.songGain.gain.value = e.target.value / 100;
+        document.getElementById('songVolVal').textContent = e.target.value;
+      });
+    }
+
+    // ── Canvas for video recording ───────────────────────────────────────────
+    const cW = vW, cH = vH;
     const canvas = document.createElement('canvas');
     canvas.width  = cW;
     canvas.height = cH;
-    const ctx = canvas.getContext('2d');
-    const vid = document.getElementById('camPreview');
+    const ctx2d = canvas.getContext('2d');
 
-    const drawFrame = () => {
-      if (!this.mediaRecorder || this.mediaRecorder.state === 'inactive') return;
-      const zoom   = this.camZoom   || 1;
-      const bright = this.camBright || 1;
-      const warmth = this.camWarmth || 0;
-
-      ctx.save();
-      ctx.filter = `brightness(${bright}) sepia(${warmth})`;
-      // Mirror + zoom: translate to center, scale, draw
-      ctx.translate(cW, 0);
-      ctx.scale(-zoom, zoom);
-      const offX = (cW * zoom - cW) / 2 / zoom;
-      const offY = (cH * zoom - cH) / 2 / zoom;
-      ctx.drawImage(vid, -offX, -offY, cW, cH);
-      ctx.restore();
-      requestAnimationFrame(drawFrame);
+    // Continuous draw loop — runs always, not gated on recording state
+    const drawLoop = () => {
+      this.rafId = requestAnimationFrame(drawLoop);
+      if (vid.readyState < 2) return; // not enough data yet
+      ctx2d.save();
+      ctx2d.filter = `brightness(${this.camBright}) sepia(${this.camWarmth})`;
+      // Mirror horizontally + zoom from center
+      ctx2d.translate(cW / 2, cH / 2);
+      ctx2d.scale(-this.camZoom, this.camZoom);
+      ctx2d.drawImage(vid, -cW / 2, -cH / 2, cW, cH);
+      ctx2d.restore();
     };
+    drawLoop();
 
     const canvasStream = canvas.captureStream(30);
     this.finalStream = new MediaStream([
@@ -315,23 +327,18 @@ class KaraokeApp {
       ...dest.stream.getAudioTracks()
     ]);
 
-    // Start drawing once video plays
-    vid.addEventListener('play', () => requestAnimationFrame(drawFrame), { once: true });
-
+    // ── Controls ─────────────────────────────────────────────────────────────
     document.getElementById('micVol').addEventListener('input', e => {
       this.micGain.gain.value = e.target.value / 100;
       document.getElementById('micVolVal').textContent = e.target.value;
     });
 
-    // Camera filter controls
-    this.camZoom   = 1;
-    this.camBright = 1;
-    this.camWarmth = 0;
+    this.camZoom = 1; this.camBright = 1; this.camWarmth = 0;
 
     document.getElementById('zoomSlider').addEventListener('input', e => {
       this.camZoom = e.target.value / 100;
-      const display = (this.camZoom - 1).toFixed(1);
-      document.getElementById('zoomVal').textContent = (display > 0 ? '+' : '') + display;
+      const d = (this.camZoom - 1).toFixed(1);
+      document.getElementById('zoomVal').textContent = (d > 0 ? '+' : '') + d;
       this.updateCamFilter();
     });
     document.getElementById('brightSlider').addEventListener('input', e => {
@@ -345,7 +352,6 @@ class KaraokeApp {
       this.updateCamFilter();
     });
 
-    // Apply mirror immediately
     this.updateCamFilter();
   }
 
@@ -386,10 +392,15 @@ class KaraokeApp {
       this.render('preview', { blob });
     };
     this.mediaRecorder.start(100);
-    document.getElementById('stopBtn').addEventListener('click', () => this.mediaRecorder.stop());
+
+    document.getElementById('stopBtn').addEventListener('click', () => {
+      this.mediaRecorder.requestData();
+      setTimeout(() => this.mediaRecorder.stop(), 300);
+    });
   }
 
   cleanup() {
+    if (this.rafId) { cancelAnimationFrame(this.rafId); this.rafId = null; }
     this.cameraStream?.getTracks().forEach(t => t.stop());
     this.audioCtx?.close();
   }
