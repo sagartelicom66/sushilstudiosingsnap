@@ -432,19 +432,71 @@ class KaraokeApp {
         <h2>Preview Your Recording</h2>
         <video src="${url}" controls playsinline class="preview-video${isPortrait ? ' preview-portrait' : ''}"></video>
         <div class="preview-actions">
-          <input id="fname" class="fname-input" value="karaoke-recording.webm" />
-          <button id="exportBtn" class="btn-export">⬇ Download Video</button>
+          <input id="fname" class="fname-input" value="karaoke" />
+          <div class="export-btns">
+            <button id="exportMp4" class="btn-export">🎬 Export MP4 (Video)</button>
+            <button id="exportMp3" class="btn-export btn-export-mp3">🎵 Export MP3 (Audio)</button>
+          </div>
+          <div id="convertStatus" class="convert-status hidden"></div>
           <button id="rerecordBtn" class="btn-secondary">🔄 Record Again</button>
         </div>
       </div>
     `;
-    document.getElementById('exportBtn').addEventListener('click', () => {
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = document.getElementById('fname').value || 'karaoke-recording.webm';
-      a.click();
-    });
+
+    document.getElementById('exportMp4').addEventListener('click', () => this.convertAndDownload(blob, 'mp4'));
+    document.getElementById('exportMp3').addEventListener('click', () => this.convertAndDownload(blob, 'mp3'));
     document.getElementById('rerecordBtn').addEventListener('click', () => { URL.revokeObjectURL(url); this.render('home'); });
+  }
+
+  async convertAndDownload(blob, format) {
+    const status = document.getElementById('convertStatus');
+    status.classList.remove('hidden');
+    status.textContent = `⏳ Converting to ${format.toUpperCase()}… please wait`;
+    document.getElementById('exportMp4').disabled = true;
+    document.getElementById('exportMp3').disabled = true;
+
+    try {
+      const { FFmpeg } = FFmpegWASM;
+      const { fetchFile } = FFmpegUtil;
+
+      const ffmpeg = new FFmpeg();
+      await ffmpeg.load({
+        coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.4/dist/umd/ffmpeg-core.js'
+      });
+
+      ffmpeg.on('progress', ({ progress }) => {
+        status.textContent = `⏳ Converting… ${Math.round(progress * 100)}%`;
+      });
+
+      const inputData = await fetchFile(blob);
+      await ffmpeg.writeFile('input.webm', inputData);
+
+      const fname = document.getElementById('fname').value || 'karaoke';
+
+      if (format === 'mp4') {
+        await ffmpeg.exec(['-i', 'input.webm', '-c:v', 'libx264', '-preset', 'slow', '-crf', '18', '-c:a', 'aac', '-b:a', '320k', '-movflags', '+faststart', 'output.mp4']);
+        const data = await ffmpeg.readFile('output.mp4');
+        this.triggerDownload(new Blob([data.buffer], { type: 'video/mp4' }), `${fname}.mp4`);
+      } else {
+        await ffmpeg.exec(['-i', 'input.webm', '-vn', '-c:a', 'libmp3lame', '-b:a', '320k', '-q:a', '0', 'output.mp3']);
+        const data = await ffmpeg.readFile('output.mp3');
+        this.triggerDownload(new Blob([data.buffer], { type: 'audio/mpeg' }), `${fname}.mp3`);
+      }
+
+      status.textContent = `✅ Done! File downloaded.`;
+    } catch (err) {
+      status.textContent = `❌ Conversion failed: ${err.message}`;
+    } finally {
+      document.getElementById('exportMp4').disabled = false;
+      document.getElementById('exportMp3').disabled = false;
+    }
+  }
+
+  triggerDownload(blob, filename) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
   }
 }
 

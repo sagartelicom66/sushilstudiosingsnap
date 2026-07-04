@@ -518,19 +518,40 @@ input[type="range"]::-webkit-slider-thumb {
   width: 100%;
 }
 
+.export-btns {
+  display: flex;
+  gap: 10px;
+}
+
 .btn-export {
+  flex: 1;
   background: linear-gradient(135deg, var(--success), #059669);
   color: white;
   border: none;
   border-radius: 8px;
   padding: 13px;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 700;
   cursor: pointer;
   transition: opacity .2s;
 }
 
-.btn-export:hover { opacity: .88; }
+.btn-export-mp3 {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+}
+
+.btn-export:hover:not(:disabled) { opacity: .88; }
+.btn-export:disabled { opacity: .4; cursor: not-allowed; }
+
+.convert-status {
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid #2a2a3e;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--primary-light);
+  text-align: center;
+}
 
 .btn-secondary {
   background: var(--surface2);
