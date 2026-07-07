@@ -147,7 +147,7 @@ class KaraokeApp {
     this.youtubeId = id;
     const preview = document.getElementById('ytPreview');
     if (id) {
-      preview.innerHTML = `<iframe src="https://www.youtube.com/embed/${id}?autoplay=0&controls=1" allowfullscreen></iframe>`;
+      preview.innerHTML = `<iframe src="https://www.youtube.com/embed/${id}?autoplay=0&controls=1" allow="autoplay; encrypted-media" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>`;
       preview.classList.remove('hidden');
     } else {
       preview.innerHTML = '';
@@ -184,8 +184,9 @@ class KaraokeApp {
         <div class="yt-area" id="bgArea">
           ${this.bgMode === 'file'
             ? `<video id="bgVideo" class="bg-video" src="${URL.createObjectURL(this.localVideoFile)}" controls playsinline></video>`
-            : `<iframe class="yt-iframe" src="https://www.youtube.com/embed/${this.youtubeId}?autoplay=1&controls=1" allow="autoplay; encrypted-media" allowfullscreen></iframe>`
+            : `<iframe class="yt-iframe" src="https://www.youtube.com/embed/${this.youtubeId}?autoplay=1&controls=1" allow="autoplay; encrypted-media" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>`
           }
+
         </div>
         <div class="cam-area${isPortrait ? ' portrait-mode' : ''}">
           <video id="camPreview" autoplay muted playsinline></video>
@@ -277,15 +278,26 @@ class KaraokeApp {
     const dest = this.audioCtx.createMediaStreamDestination();
 
     const micSource  = this.audioCtx.createMediaStreamSource(this.cameraStream);
-    const preAmp     = this.audioCtx.createGain();
-    preAmp.gain.value = 3.0;
+
+    // High-pass filter: removes low rumble/hum below 80Hz
+    const highPass = this.audioCtx.createBiquadFilter();
+    highPass.type = 'highpass';
+    highPass.frequency.value = 80;
+
+    // Gentle compressor: just tames peaks, doesn't squash voice
     const compressor = this.audioCtx.createDynamicsCompressor();
-    compressor.threshold.value = -18; compressor.knee.value = 6;
-    compressor.ratio.value = 3; compressor.attack.value = 0.001; compressor.release.value = 0.1;
+    compressor.threshold.value = -12;
+    compressor.knee.value      = 10;
+    compressor.ratio.value     = 2;
+    compressor.attack.value    = 0.005;
+    compressor.release.value   = 0.25;
+
+    // Single gain node — user controlled via slider
     this.micGain = this.audioCtx.createGain();
     this.micGain.gain.value = 1.5;
-    micSource.connect(preAmp);
-    preAmp.connect(compressor);
+
+    micSource.connect(highPass);
+    highPass.connect(compressor);
     compressor.connect(this.micGain);
     this.micGain.connect(dest);
 
@@ -398,8 +410,8 @@ class KaraokeApp {
     this.recordedChunks = [];
     this.mediaRecorder = new MediaRecorder(this.finalStream, {
       mimeType,
-      videoBitsPerSecond: 5_000_000,
-      audioBitsPerSecond: 320_000
+      videoBitsPerSecond: 8_000_000,
+      audioBitsPerSecond: 384_000
     });
     this.mediaRecorder.ondataavailable = e => { if (e.data.size > 0) this.recordedChunks.push(e.data); };
     this.mediaRecorder.onstop = () => {
@@ -443,49 +455,33 @@ class KaraokeApp {
       </div>
     `;
 
-    document.getElementById('exportMp4').addEventListener('click', () => this.convertAndDownload(blob, 'mp4'));
-    document.getElementById('exportMp3').addEventListener('click', () => this.convertAndDownload(blob, 'mp3'));
+    document.getElementById('exportMp4').addEventListener('click', () => this.convertAndDownload(blob, 'webm'));
+    document.getElementById('exportMp3').addEventListener('click', () => {
+      const status = document.getElementById('convertStatus');
+      status.classList.remove('hidden');
+      status.textContent = 'MP3 export disabled in this build.';
+    });
     document.getElementById('rerecordBtn').addEventListener('click', () => { URL.revokeObjectURL(url); this.render('home'); });
   }
 
   async convertAndDownload(blob, format) {
     const status = document.getElementById('convertStatus');
     status.classList.remove('hidden');
-    status.textContent = `⏳ Converting to ${format.toUpperCase()}… please wait`;
+    status.textContent = '⏳ Preparing your video… please wait';
     document.getElementById('exportMp4').disabled = true;
     document.getElementById('exportMp3').disabled = true;
 
     try {
-      const { FFmpeg } = FFmpegWASM;
-      const { fetchFile } = FFmpegUtil;
-
-      const ffmpeg = new FFmpeg();
-      await ffmpeg.load({
-        coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.4/dist/umd/ffmpeg-core.js'
-      });
-
-      ffmpeg.on('progress', ({ progress }) => {
-        status.textContent = `⏳ Converting… ${Math.round(progress * 100)}%`;
-      });
-
-      const inputData = await fetchFile(blob);
-      await ffmpeg.writeFile('input.webm', inputData);
-
       const fname = document.getElementById('fname').value || 'karaoke';
-
-      if (format === 'mp4') {
-        await ffmpeg.exec(['-i', 'input.webm', '-c:v', 'libx264', '-preset', 'slow', '-crf', '18', '-c:a', 'aac', '-b:a', '320k', '-movflags', '+faststart', 'output.mp4']);
-        const data = await ffmpeg.readFile('output.mp4');
-        this.triggerDownload(new Blob([data.buffer], { type: 'video/mp4' }), `${fname}.mp4`);
-      } else {
-        await ffmpeg.exec(['-i', 'input.webm', '-vn', '-c:a', 'libmp3lame', '-b:a', '320k', '-q:a', '0', 'output.mp3']);
-        const data = await ffmpeg.readFile('output.mp3');
-        this.triggerDownload(new Blob([data.buffer], { type: 'audio/mpeg' }), `${fname}.mp3`);
+      if (format === 'webm') {
+        this.triggerDownload(blob, `${fname}.webm`);
+        status.textContent = '✅ Your video download has started.';
+        return;
       }
 
-      status.textContent = `✅ Done! File downloaded.`;
+      status.textContent = '⚠️ Unsupported export format.';
     } catch (err) {
-      status.textContent = `❌ Conversion failed: ${err.message}`;
+      status.textContent = `❌ Export failed: ${err.message}`;
     } finally {
       document.getElementById('exportMp4').disabled = false;
       document.getElementById('exportMp3').disabled = false;
